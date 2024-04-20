@@ -164,3 +164,4 @@ custom_layer_log.txt
 logs/
 generated_text.txt
 expert_cache_log.txt
+mmlu_20.txt

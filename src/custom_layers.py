@@ -56,6 +56,16 @@ class HQQLinearTritonSavable(HQQLinear):
             self.W_q = Quantizer.pack[self.meta["packing"]](W_q)
 
     def forward(self, x):
+        with open(
+            "/content/drive/MyDrive/11868/mixtral-offloading/custom_layer_log.txt", "a"
+        ) as f:
+            f.write("\n")
+            f.write("HQQLinearTritonSavable forward called: \n")
+            f.write(f"forward called, x shape: {x.shape}")
+            f.write("\n")
+            f.write(f"x: {x}")
+            f.write("\n")
+
         return self.forward_triton(x)
 
     def set_backend(self, backend):
@@ -351,18 +361,21 @@ class SparseMoeWrapper(nn.Module):
 
         active_experts = selected_experts.flatten().unique().tolist()
 
+        # with open(
+        #     "/content/drive/MyDrive/11868/mixtral-offloading/custom_layer_log.txt", "a"
+        # ) as f:
+        #     f.write("\n")
+        #     f.write("forward called: \n")
+        #     f.write("\n")
+        #     f.write("Active Experts:\n")
+        #     for expert in active_experts:
+        #         f.write(f"{expert}\n")
+
         # Loop over all available experts in the model and perform the computation on each expert
-        for (
-            _layer_index,
-            expert_idx,
-            activated_experts,
-            cached_experts,
-        ), expert_layer in self.experts.load_experts(
+        for (_layer_index, expert_idx), expert_layer in self.experts.load_experts(
             *((self.layer_id, expert_idx) for expert_idx in active_experts),
             unordered=True,
         ):
-            print(f"cached_experts: {cached_experts}")
-            print(f"activated_experts: {activated_experts}")
             idx, top_x = torch.where(expert_mask[expert_idx])
             assert top_x.shape[0] > 0
 

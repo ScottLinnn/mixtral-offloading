@@ -154,21 +154,19 @@ class ExpertCache:
 
     def load_experts(
         self, *uids: ExpertUID, unordered: bool = False
-    ) -> Iterator[
-        Tuple[ExpertUID, MixtralExpertWrapper, List[ExpertInfo], List[ExpertInfo]]
-    ]:
+    ) -> Iterator[Tuple[ExpertUID, MixtralExpertWrapper]]:
         """
         :example:
-        >>> for uid, expert, activated_experts, cached_experts in expert_cache.load_experts(*list_of_uids, unordered=True):
+        >>> for uid, expert in expert_cache.load_experts(*list_of_uids, unordered=True):
         >>>     for uid, expert in expert_iter:
         >>>         result += expert(x) * get_moe_weight(uid)
 
         :param uids: iterate over the specified expert uids. Same uids as in add_expert
         :param unordered: if True, allows cache to iterate experts in arbitrary order
             The order is chosen to minimize the total wait time.
-        :returns: an iterator that yields (uid, expert, activated_experts, cached_experts) tuples
-        """
+        :returns: an iterator that yields (uid, expert) pairs, only usable inside the for loop
 
+        """
         assert len(set(uids)) == len(uids)
         assert not self.active, "already loading experts; buffers are busy"
         if unordered:  # yield non-offloaded experts first
@@ -190,6 +188,10 @@ class ExpertCache:
                 [self.main_modules[info.index] for info in pre_loaded_infos]
             )
 
+            activated_experts = infos
+            offloaded_experts = list(eviction_group.offloaded_infos.values())
+            to_load_experts = [info for info in infos if info.offloaded]
+
             # begin loading experts into free buffers in background (via non-blocking copy)
             infos_to_load = deque([info for info in infos if info.offloaded])
             infos_in_loading = deque([])
@@ -206,28 +208,40 @@ class ExpertCache:
                     self._swap(info_to_load, eviction_group.choose_expert_to_evict())
                 )
 
+            # write both expert lists to a log file
+            # print(f"Activated Experts: {activated_experts}")
+            # print(f"Cached Experts: {cached_experts}")
+            # with open(
+            #     "/content/drive/MyDrive/11868/mixtral-offloading/expert_cache_log.txt",
+            #     "a",
+            # ) as f:
+            #     f.write("\n")
+            #     f.write("load_experts called: \n")
+            #     f.write("\n")
+            #     f.write("Activated Experts:\n")
+            #     for expert in activated_experts:
+            #         f.write(f"{expert}\n")
+            #     f.write("\nOffloaded Experts:\n")
+            #     for expert in offloaded_experts:
+            #         f.write(f"{expert}\n")
+                # f.write("\nTo Load Experts:\n")
+                # for expert in to_load_experts:
+                #     f.write(f"{expert}\n")
+            with open(
+                "/content/drive/MyDrive/11868/mixtral-offloading/expert_cache.tsv",
+                "a",
+            ) as f:
+                f.write("load_experts called: \n")
+                for expert in activated_experts + offloaded_experts:
+                    f.write(f"{expert.uid[0]}\t{expert.uid[1]}\t{expert.eviction_group}\t{expert.offloaded}\t{expert.index}\n")
             for info in infos:
-                activated_experts = list(eviction_group.main_infos.values())[
-                    -window_size:
-                ]
-                cached_experts = list(eviction_group.offloaded_infos.values())
 
                 if len(pre_loaded_infos) > 0 and info is pre_loaded_infos[0]:
                     pre_loaded_infos.popleft()
-                    yield (
-                        info.uid,
-                        pre_loaded_experts.popleft(),
-                        activated_experts,
-                        cached_experts,
-                    )
+                    yield (info.uid, pre_loaded_experts.popleft())
                 elif len(infos_in_loading) > 0 and info is infos_in_loading[0]:
                     infos_in_loading.popleft()
-                    yield (
-                        info.uid,
-                        experts_in_loading.popleft(),
-                        activated_experts,
-                        cached_experts,
-                    )
+                    yield (info.uid, experts_in_loading.popleft())
                     if len(infos_to_load) > 0:
                         info_to_load = infos_to_load.popleft()
                         infos_in_loading.append(info_to_load)
