@@ -346,12 +346,13 @@ class SparseMoeWrapper(nn.Module):
         routing_weights, selected_experts = torch.topk(
             routing_weights, self.top_k, dim=-1
         )
-
-        next_selected_experts = torch.topk(next_router_logits, self.top_k, dim=-1)
-        next_selected_experts = next_selected_experts.flatten().unique().tolist()
-        next_selected_expertids = (
-            (self.layer_id, expert_idx) for expert_idx in active_experts
-        )
+        next_selected_expertids = None
+        if self.next_gate is not None:
+            next_selected_experts = torch.topk(next_router_logits, self.top_k, dim=-1)
+            next_selected_experts = next_selected_experts.flatten().unique().tolist()
+            next_selected_expertids = (
+                (self.layer_id, expert_idx) for expert_idx in active_experts
+            )
         routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
         # we cast back to the input dtype
         routing_weights = routing_weights.to(hidden_states.dtype)
@@ -375,7 +376,7 @@ class SparseMoeWrapper(nn.Module):
             *((self.layer_id, expert_idx) for expert_idx in active_experts),
             unordered=True,
         ):
-            if first_time:
+            if first_time and next_selected_expertids is not None:
                 first_time = False
                 thread = threading.Thread(
                     target=self.experts.specload_experts, args=(next_selected_expertids)
