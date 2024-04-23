@@ -190,7 +190,6 @@ class ExpertCache:
 
             activated_experts = infos
             offloaded_experts = list(eviction_group.offloaded_infos.values())
-            to_load_experts = [info for info in infos if info.offloaded]
 
             # begin loading experts into free buffers in background (via non-blocking copy)
             infos_to_load = deque([info for info in infos if info.offloaded])
@@ -207,33 +206,16 @@ class ExpertCache:
                 experts_in_loading.append(
                     self._swap(info_to_load, eviction_group.choose_expert_to_evict())
                 )
-
-            # write both expert lists to a log file
-            # print(f"Activated Experts: {activated_experts}")
-            # print(f"Cached Experts: {cached_experts}")
-            # with open(
-            #     "/content/drive/MyDrive/11868/mixtral-offloading/expert_cache_log.txt",
-            #     "a",
-            # ) as f:
-            #     f.write("\n")
-            #     f.write("load_experts called: \n")
-            #     f.write("\n")
-            #     f.write("Activated Experts:\n")
-            #     for expert in activated_experts:
-            #         f.write(f"{expert}\n")
-            #     f.write("\nOffloaded Experts:\n")
-            #     for expert in offloaded_experts:
-            #         f.write(f"{expert}\n")
-                # f.write("\nTo Load Experts:\n")
-                # for expert in to_load_experts:
-                #     f.write(f"{expert}\n")
             with open(
                 "/content/drive/MyDrive/11868/mixtral-offloading/expert_cache.tsv",
                 "a",
             ) as f:
                 f.write("load_experts called: \n")
                 for expert in activated_experts + offloaded_experts:
-                    f.write(f"{expert.uid[0]}\t{expert.uid[1]}\t{expert.eviction_group}\t{expert.offloaded}\t{expert.index}\n")
+                    f.write(
+                        f"{expert.uid[0]}\t{expert.uid[1]}\t{expert.eviction_group}\t{expert.offloaded}\t{expert.index}\n"
+                    )
+            self.active = False
             for info in infos:
 
                 if len(pre_loaded_infos) > 0 and info is pre_loaded_infos[0]:
@@ -252,6 +234,55 @@ class ExpertCache:
                         )
                 else:
                     raise RuntimeError("internal error: caching algorithm failed")
+        finally:
+            self.active = False
+
+    def specload_experts(self, *uids: ExpertUID):
+        assert len(set(uids)) == len(uids)
+        assert not self.active, "already loading experts; buffers are busy"
+        infos = [self.registered_experts[uid] for uid in uids]
+        assert (
+            len(set(info.eviction_group for info in infos)) == 1
+        ), "experts must be in the same evicton group"
+        eviction_group = self.group_infos[infos[0].eviction_group]
+        # for info in infos:
+        #     eviction_group.mark_used(info)
+
+        try:
+            self.active = True
+            # save pre-loaded experts before they can be swapped
+            # pre_loaded_infos = deque([info for info in infos if not info.offloaded])
+            # pre_loaded_experts = deque(
+            #     [self.main_modules[info.index] for info in pre_loaded_infos]
+            # )
+
+            activated_experts = infos
+            offloaded_experts = list(eviction_group.offloaded_infos.values())
+
+            # begin loading experts into free buffers in background (via non-blocking copy)
+            infos_to_load = deque([info for info in infos if info.offloaded])
+            infos_in_loading = deque([])
+            experts_in_loading = deque([])
+            window_size = min(
+                len(self.device_expert_buffers) - 1,
+                len(eviction_group.main_infos),
+                len(infos_to_load),
+            )
+            for _ in range(window_size):
+                info_to_load = infos_to_load.popleft()
+                infos_in_loading.append(info_to_load)
+                experts_in_loading.append(
+                    self._swap(info_to_load, eviction_group.choose_expert_to_evict())
+                )
+            with open(
+                "/content/drive/MyDrive/11868/mixtral-offloading/expert_cache.tsv",
+                "a",
+            ) as f:
+                f.write("specload_experts called: \n")
+                for expert in activated_experts + offloaded_experts:
+                    f.write(
+                        f"{expert.uid[0]}\t{expert.uid[1]}\t{expert.eviction_group}\t{expert.offloaded}\t{expert.index}\n"
+                    )
         finally:
             self.active = False
 

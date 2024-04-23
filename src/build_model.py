@@ -208,11 +208,16 @@ def build_model(
         buffer_size=offload_config.buffer_size,
     )
     for layer_idx in trange(model_config.num_hidden_layers, desc="Loading experts"):
+        next_layer_gate = None
+        if layer_idx < model_config.num_hidden_layers - 1:
+            next_layer_gate = model.model.layers[layer_idx + 1].block_sparse_moe.gate
+
         curr_layer = model.model.layers[layer_idx]
         curr_layer.block_sparse_moe = SparseMoeWrapper(
             model_config,
             layer_idx,
             curr_layer.block_sparse_moe.gate,
+            next_layer_gate,
             expert_cache,
         )
 

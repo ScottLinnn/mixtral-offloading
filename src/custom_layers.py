@@ -7,6 +7,7 @@ from hqq.core.quantize import HQQLinear, Quantizer
 
 import torch
 from torch import nn
+import threading
 from torch.nn import functional as F
 
 from .packing import (
@@ -321,7 +322,7 @@ class MixtralBLockSparseTop2MLP_HQQ(nn.Module):
 
 
 class SparseMoeWrapper(nn.Module):
-    def __init__(self, config, layer_id, gate, expert_cache):
+    def __init__(self, config, layer_id, gate, next_gate, expert_cache):
         super().__init__()
 
         self.hidden_dim = config.hidden_size
@@ -331,6 +332,7 @@ class SparseMoeWrapper(nn.Module):
         self.layer_id = layer_id
 
         self.gate = gate
+        self.next_gate = next_gate
         self.experts = expert_cache
 
     def forward(self, hidden_states: torch.Tensor) -> torch.Tensor:
@@ -338,10 +340,17 @@ class SparseMoeWrapper(nn.Module):
         hidden_states = hidden_states.view(-1, hidden_dim)
         # router_logits: (batch * sequence_length, n_experts)
         router_logits = self.gate(hidden_states)
+        next_router_logits = self.next_gate(hidden_states)
 
         routing_weights = F.softmax(router_logits, dim=1, dtype=torch.float)
         routing_weights, selected_experts = torch.topk(
             routing_weights, self.top_k, dim=-1
+        )
+
+        next_selected_experts = torch.topk(next_router_logits, self.top_k, dim=-1)
+        next_selected_experts = next_selected_experts.flatten().unique().tolist()
+        next_selected_expertids = (
+            (self.layer_id, expert_idx) for expert_idx in active_experts
         )
         routing_weights /= routing_weights.sum(dim=-1, keepdim=True)
         # we cast back to the input dtype
@@ -360,22 +369,18 @@ class SparseMoeWrapper(nn.Module):
         ).permute(2, 1, 0)
 
         active_experts = selected_experts.flatten().unique().tolist()
-
-        # with open(
-        #     "/content/drive/MyDrive/11868/mixtral-offloading/custom_layer_log.txt", "a"
-        # ) as f:
-        #     f.write("\n")
-        #     f.write("forward called: \n")
-        #     f.write("\n")
-        #     f.write("Active Experts:\n")
-        #     for expert in active_experts:
-        #         f.write(f"{expert}\n")
-
+        first_time = True
         # Loop over all available experts in the model and perform the computation on each expert
         for (_layer_index, expert_idx), expert_layer in self.experts.load_experts(
             *((self.layer_id, expert_idx) for expert_idx in active_experts),
             unordered=True,
         ):
+            if first_time:
+                first_time = False
+                thread = threading.Thread(
+                    target=self.experts.specload_experts, args=(next_selected_expertids)
+                )
+                thread.start()
             idx, top_x = torch.where(expert_mask[expert_idx])
             assert top_x.shape[0] > 0
 
